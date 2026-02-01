@@ -436,6 +436,44 @@ const modelLoadingNodeTypes = new Set([
 
 const audioLoadingNodeTypes = new Set(["LoadAudio"]);
 
+// Mesh loading node types (UniRig and other 3D nodes)
+const meshLoadingNodeTypes = new Set([
+  "UniRigLoadMesh",
+  "Load3D",
+  "Load3DGS",
+  "LoadMesh",
+]);
+
+// Path for mesh files (ComfyUI input directory)
+const meshInputPath = path.join(config.comfyDir, "input");
+
+/**
+ * Process mesh loading nodes - download mesh files from URLs
+ */
+async function processMeshLoadingNode(
+  node: ComfyNode,
+  log: FastifyBaseLogger,
+  getCredentials: CredentialProvider
+): Promise<ComfyNode> {
+  const storageManager = getStorageManager();
+  const { file_path } = node.inputs;
+
+  if (file_path && typeof file_path === "string" && isValidUrl(file_path)) {
+    log.info(`Downloading mesh file from URL: ${file_path}`);
+    const localMeshPath = await storageManager.downloadFile(
+      file_path,
+      meshInputPath,
+      undefined,
+      getCredentials(file_path)
+    );
+    const filename = path.basename(localMeshPath);
+    log.info(`Mesh downloaded to: ${localMeshPath}, using filename: ${filename}`);
+    node.inputs.file_path = filename;
+  }
+
+  return node;
+}
+
 export type NodeProcessError = Error & {
   code?: number;
   location?: string;
@@ -554,6 +592,21 @@ export async function preprocessNodes(
         ) as NodeProcessError;
         err.code = 400;
         err.location = `prompt.${nodeId}.inputs`;
+        throw err;
+      }
+    } else if (meshLoadingNodeTypes.has(node.class_type)) {
+      /**
+       * If the node is for loading a 3D mesh, the user may have provided
+       * a URL. We need to download the mesh file to the input directory.
+       */
+      try {
+        Object.assign(node, await processMeshLoadingNode(node, log, getCredentials));
+      } catch (e: any) {
+        const err = new Error(
+          `Failed to download mesh for node ${nodeId}: ${e.message}`
+        ) as NodeProcessError;
+        err.code = 400;
+        err.location = `prompt.${nodeId}.inputs.file_path`;
         throw err;
       }
     }
